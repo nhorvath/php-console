@@ -15,13 +15,25 @@ namespace PhpConsole\Storage;
  */
 class MongoDB extends ExpiringKeyValue {
 
-	/** @var  \MongoClient */
+	/**
+	 * @var boolean true if using newer mongodb extension with mongo php lib
+	 * https://pecl.php.net/package/mongodb
+	 * https://github.com/mongodb/mongo-php-library
+	 */
+	protected $useMongoLib = false;
+
+	/** @var \MongoClient|\MongoDB\Client */
 	protected $mongoClient;
-	/** @var  \MongoCollection */
+	/** @var \MongoCollection|\MongoDB\Collection */
 	protected $mongoCollection;
 
 	public function __construct($server = 'mongodb://localhost:27017', $db = 'phpconsole', $collection = 'phpconsole') {
-		$this->mongoClient = new \MongoClient($server);
+		if (class_exists('\MongoDB\Client')) {
+			$this->useMongoLib = true;
+			$this->mongoClient = new \MongoDB\Client($server);
+		} else {
+			$this->mongoClient = new \MongoClient($server);
+		}
 		if(!$this->mongoClient) {
 			throw new \Exception('Unable to connect to MongoDB server');
 		}
@@ -31,17 +43,31 @@ class MongoDB extends ExpiringKeyValue {
 			throw new \Exception('Unable to get collection');
 		}
 
-		if (!in_array($collection, $this->mongoCollection->db->getCollectionNames())) {
-			$this->mongoCollection->db->createCollection($collection);
-		}
+		if ($this->useMongoLib) {
+			$this->mongoCollection = $this->mongoCollection->withOptions(array(
+				'typeMap' => array('root' => 'array', 'document' => 'array', 'array' => 'array'),
+			));
 
-		$this->mongoCollection->ensureIndex(array(
-			'expireAt' => 1,
-		), array(
-			'background' => true,
-			'name' => 'TTL',
-			'expireAfterSeconds' => 0,
-		));
+			$this->mongoCollection->createIndex(array(
+				'expireAt' => 1,
+			), array(
+				'background' => true,
+				'name' => 'TTL',
+				'expireAfterSeconds' => 0,
+			));
+		} else {
+			if (!in_array($collection, $this->mongoCollection->db->getCollectionNames())) {
+				$this->mongoCollection->db->createCollection($collection);
+			}
+
+			$this->mongoCollection->ensureIndex(array(
+				'expireAt' => 1,
+			), array(
+				'background' => true,
+				'name' => 'TTL',
+				'expireAfterSeconds' => 0,
+			));
+		}
 	}
 
 	/**
@@ -51,15 +77,27 @@ class MongoDB extends ExpiringKeyValue {
 	 * @param int $expire
 	 */
 	protected function set($key, $data, $expire) {
-		$this->mongoCollection->update(array(
-			'key' => $key
-		), array(
-			'key' => $key,
-			'data' => $data,
-			'expireAt' => new \MongoDate(time() + $expire)
-		), array(
-			'upsert' => true
-		));
+		if ($this->useMongoLib) {
+			$this->mongoCollection->replaceOne(array(
+				'key' => $key
+			), array(
+				'key' => $key,
+				'data' => $data,
+				'expireAt' => new MongoDB\BSON\UTCDateTime((time() + $expire)*1000)
+			), array(
+				'upsert' => true
+			));
+		} else {
+			$this->mongoCollection->update(array(
+				'key' => $key
+			), array(
+				'key' => $key,
+				'data' => $data,
+				'expireAt' => new \MongoDate(time() + $expire)
+			), array(
+				'upsert' => true
+			));
+		}
 	}
 
 	/**
@@ -80,6 +118,12 @@ class MongoDB extends ExpiringKeyValue {
 	 * @return mixed
 	 */
 	protected function delete($key) {
-		return $this->mongoCollection->remove(array('key' => $key));
+		if ($this->useMongoLib) {
+			$status = $this->mongoCollection->deleteMany(array('key' => $key));
+			return $status->isAcknowledged();
+		} else {
+			$status = $this->mongoCollection->remove(array('key' => $key));
+			return $status['ok'];
+		}
 	}
 }
