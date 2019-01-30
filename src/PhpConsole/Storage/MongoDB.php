@@ -83,7 +83,7 @@ class MongoDB extends ExpiringKeyValue {
 			), array(
 				'key' => $key,
 				'data' => $data,
-				'expireAt' => new MongoDB\BSON\UTCDateTime((time() + $expire)*1000)
+				'expireAt' => new \MongoDB\BSON\UTCDateTime((time() + $expire)*1000)
 			), array(
 				'upsert' => true
 			));
